@@ -1,5 +1,3 @@
-fastapi
-uvicorn[standard]
-sqlalchemy
-psycopg2-binary
-pydantic
+flask
+flask-cors
+gunicorn
