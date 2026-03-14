@@ -1,0 +1,110 @@
+# ---------------------------------------------------------------
+# Transit Tracker — Docker Compose
+# Launch with: docker compose up -d
+# ---------------------------------------------------------------
+version: "3.9"
+
+services:
+
+  # ------------------------------------------------------------------
+  # PostgreSQL 15 + PostGIS 3.4 (Alpine image — ARM64 compatible)
+  # ------------------------------------------------------------------
+  db:
+    image: postgis/postgis:15-3.4-alpine
+    container_name: transit_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     transit_app
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB:       transit_db
+    volumes:
+      # Persistent named volume — survives container restarts
+      - postgres_data:/var/lib/postgresql/data
+      # Auto-run schema on first boot
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    ports:
+      # Expose to host for local psql/pgAdmin access.
+      # Remove this in production if DB should not be publicly reachable.
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U transit_app -d transit_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ------------------------------------------------------------------
+  # Redis 7 (Alpine — minimal image, ARM64 compatible)
+  # ------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: transit_redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ------------------------------------------------------------------
+  # FastAPI Application
+  # ------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: transit_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV:        production
+      # PostgreSQL — uses Docker internal DNS (service name = hostname)
+      DB_HOST:        db
+      DB_PORT:        5432
+      DB_USER:        transit_app
+      DB_PASSWORD:    changeme
+      DB_NAME:        transit_db
+      DB_POOL_MIN_SIZE: 2
+      DB_POOL_MAX_SIZE: 10
+      # Redis — uses Docker internal DNS
+      REDIS_HOST:     redis
+      REDIS_PORT:     6379
+      REDIS_PASSWORD: ""
+      REDIS_DB:       0
+      BUS_LOCATION_TTL_SECONDS: 30
+      STREAM_MAXLEN:  500
+      # Geofence
+      GEOFENCE_ALERT_COOLDOWN_SECONDS: 60
+      # Crowdsource
+      CROWDSOURCE_GRACE_PERIOD_SECONDS:    30
+      CROWDSOURCE_MIN_SPEED_KMH:           15.0
+      CROWDSOURCE_MAX_SPEED_KMH:           80.0
+      CROWDSOURCE_CLUSTER_RADIUS_M:        20.0
+      CROWDSOURCE_MIN_QUORUM:              2
+      CROWDSOURCE_PING_TTL_SECONDS:        15
+      CROWDSOURCE_LOCATION_TTL_SECONDS:    45
+      CROWDSOURCE_CHECK_INTERVAL_SECONDS:  10
+      CROWDSOURCE_ACTIVE_FLAG_TTL_SECONDS: 120
+      # ETA
+      ETA_MODEL_PATH:                    models/eta_model_latest.joblib
+      ETA_MIN_SPEED_FOR_PHYSICS_KMH:     10.0
+      ETA_MAX_LOCATION_AGE_SECONDS:      20
+      ETA_MAX_STOPS_IN_RESPONSE:         20
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # Persist trained models across container restarts
+      - models_data:/app/models
+
+volumes:
+  postgres_data:
+  redis_data:
+  models_data:
