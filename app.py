@@ -1,53 +1,71 @@
-import os
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-import math
+import time
 
 app = Flask(__name__)
 CORS(app)
 
-# --- CONFIGURATION ---
-# REPLACE THESE with your College's actual GPS coordinates
-COLLEGE_LAT = 12.9716 
-COLLEGE_LNG = 77.5946
-BUS_SPEED_KMH = 20  # Estimated average speed in city traffic
+# In-memory storage for bus location
+bus_location = {
+    "lat": None,
+    "lng": None,
+    "timestamp": None
+}
 
-# Global variable to store the latest bus location
-current_bus_location = {"lat": COLLEGE_LAT, "lng": COLLEGE_LNG, "eta": 0}
 
-def calculate_eta(bus_lat, bus_lng):
-    """Calculates minutes until arrival using Haversine formula."""
-    R = 6371  # Earth radius in km
-    dlat = math.radians(COLLEGE_LAT - bus_lat)
-    dlng = math.radians(COLLEGE_LNG - bus_lng)
-    
-    a = (math.sin(dlat / 2)**2 + math.cos(math.radians(bus_lat)) * math.cos(math.radians(COLLEGE_LAT)) * math.sin(dlng / 2)**2)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    distance = R * c
-    
-    # Time = Distance / Speed
-    hours = distance / BUS_SPEED_KMH
-    return round(hours * 60)
+@app.route("/")
+def home():
+    return render_template("index.html")
 
-@app.route('/')
-def index():
-    return render_template('index.html')
 
-@app.route('/update_location', methods=['POST'])
+# API: Update bus location
+@app.route("/update-location", methods=["POST"])
 def update_location():
-    global current_bus_location
-    data = request.json
-    lat, lng = data['lat'], data['lng']
-    
-    eta = calculate_eta(lat, lng)
-    current_bus_location = {"lat": lat, "lng": lng, "eta": eta}
-    
-    return jsonify({"status": "success", "eta": eta})
+    data = request.get_json()
 
-@app.route('/get_location', methods=['GET'])
-def get_location():
-    return jsonify(current_bus_location)
+    if not data:
+        return jsonify({"error": "No data received"}), 400
+
+    if "lat" not in data or "lng" not in data:
+        return jsonify({"error": "Invalid GPS data"}), 400
+
+    try:
+        lat = float(data["lat"])
+        lng = float(data["lng"])
+    except ValueError:
+        return jsonify({"error": "Latitude and Longitude must be numbers"}), 400
+
+    bus_location["lat"] = lat
+    bus_location["lng"] = lng
+    bus_location["timestamp"] = time.time()
+
+    return jsonify({
+        "status": "success",
+        "message": "Location updated",
+        "data": bus_location
+    })
+
+
+# API: Get bus location
+@app.route("/bus-location", methods=["GET"])
+def get_bus_location():
+    if bus_location["lat"] is None:
+        return jsonify({
+            "status": "error",
+            "message": "Bus location not available yet"
+        }), 404
+
+    return jsonify({
+        "status": "success",
+        "data": bus_location
+    })
+
+
+# API: Health check (Render monitoring)
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "running"})
+
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=5000, debug=True)
